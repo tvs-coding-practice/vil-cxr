@@ -236,7 +236,7 @@ class Engine():
                 if distill_loss > 0:
                     loss += distill_loss
            
-            acc1, acc5 = accuracy(logits, target, topk=(1, 5))
+            acc1, acc3 = accuracy(logits, target, topk=(1, 3))
 
             if not math.isfinite(loss.item()):
                 print("Loss is {}, stopping training".format(loss.item()))
@@ -250,7 +250,7 @@ class Engine():
             metric_logger.update(Loss=loss.item())
             metric_logger.update(Lr=optimizer.param_groups[0]["lr"])
             metric_logger.meters['Acc@1'].update(acc1.item(), n=input.shape[0])
-            metric_logger.meters['Acc@5'].update(acc5.item(), n=input.shape[0])
+            metric_logger.meters['Acc@3'].update(acc3.item(), n=input.shape[0])
 
             if ema_model is not None:
                 ema_model.update(model.get_adapter())
@@ -327,11 +327,11 @@ class Engine():
                 if self.args.d_threshold and self.current_task + 1 != self.args.num_tasks and self.current_task == task_id:
                     label_correct, label_total = self.update_acc_per_label(label_correct, label_total, output, target)
 
-                acc1, acc5 = accuracy(output, target, topk=(1, 5))
+                acc1, acc3 = accuracy(output, target, topk=(1, 3))
 
                 metric_logger.meters['Loss'].update(loss.item())
                 metric_logger.meters['Acc@1'].update(acc1.item(), n=input.shape[0])
-                metric_logger.meters['Acc@5'].update(acc5.item(), n=input.shape[0])
+                metric_logger.meters['Acc@3'].update(acc3.item(), n=input.shape[0])
 
                 # 2. Collect predictions for global metrics
                 _, pred = output.max(1)
@@ -356,14 +356,14 @@ class Engine():
         # Gather the stats from all processes
         metric_logger.synchronize_between_processes()
 
-        print('* Acc@1 {top1.global_avg:.3f} Acc@5 {top5.global_avg:.3f} Loss {losses.global_avg:.3f} F1 {f1:.3f}'
-              .format(top1=metric_logger.meters['Acc@1'], top5=metric_logger.meters['Acc@5'],
+        print('* Acc@1 {top1.global_avg:.3f} Acc@3 {top3.global_avg:.3f} Loss {losses.global_avg:.3f} F1 {f1:.3f}'
+              .format(top1=metric_logger.meters['Acc@1'], top3=metric_logger.meters['Acc@3'],
                       losses=metric_logger.meters['Loss'], f1=macro_f1))
 
         # 4. Return extended dictionary
         return {
             'Acc@1': metric_logger.meters['Acc@1'].global_avg,
-            'Acc@5': metric_logger.meters['Acc@5'].global_avg,
+            'Acc@3': metric_logger.meters['Acc@3'].global_avg,
             'Loss': metric_logger.meters['Loss'].global_avg,
             'F1': macro_f1,
             'Precision': macro_precision,
@@ -373,7 +373,7 @@ class Engine():
     @torch.no_grad()
     def evaluate_till_now(self, model: torch.nn.Module, data_loader,
                           device, task_id=-1, class_mask=None, acc_matrix=None, ema_model=None, args=None, ):
-        # 5. Initialize matrix to store [Acc@1, Acc@5, Loss, F1] for every task
+        # 5. Initialize matrix to store [Acc@1, Acc@3, Loss, F1] for every task
         stat_matrix = np.zeros((4, args.num_tasks))
 
         for i in range(task_id + 1):
@@ -381,7 +381,7 @@ class Engine():
                                        device=device, task_id=i, class_mask=class_mask, ema_model=ema_model, args=args)
 
             stat_matrix[0, i] = test_stats['Acc@1']
-            stat_matrix[1, i] = test_stats['Acc@5']
+            stat_matrix[1, i] = test_stats['Acc@3']
             stat_matrix[2, i] = test_stats['Loss']
             stat_matrix[3, i] = test_stats['F1']
 
@@ -392,7 +392,7 @@ class Engine():
 
         diagonal = np.diag(acc_matrix)
 
-        result_str = "[Average metrics till task {}]\tAcc@1: {:.4f}\tAcc@5: {:.4f}\tLoss: {:.4f}\tF1: {:.4f}".format(
+        result_str = "[Average metrics till task {}]\tAcc@1: {:.4f}\tAcc@3: {:.4f}\tLoss: {:.4f}\tF1: {:.4f}".format(
             task_id + 1, avg_stat[0], avg_stat[1], avg_stat[2], avg_stat[3])
 
         # 6. Compute Continual Learning Metrics (Forgetting, Backward Transfer)
