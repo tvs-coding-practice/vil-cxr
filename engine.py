@@ -20,7 +20,7 @@ from sklearn.cluster import KMeans
 from sklearn.manifold import TSNE
 import matplotlib.pyplot as plt
 
-from sklearn.metrics import precision_score, recall_score, f1_score
+from sklearn.metrics import precision_score, recall_score, f1_score, confusion_matrix
 
 
 class Engine():
@@ -59,7 +59,7 @@ class Engine():
             self.acc_per_label = np.zeros((self.args.class_num, self.args.domain_num))
             self.label_train_count = np.zeros((self.args.class_num))
             self.tanh = torch.nn.Tanh()
-            
+        
         self.cs=torch.nn.CosineSimilarity(dim=1,eps=1e-6)
 
     def update_ema_adapter(self, ema_adapter, current_adapter, decay):
@@ -365,6 +365,49 @@ class Engine():
         macro_precision = precision_score(all_targets, all_preds, average='macro', zero_division=0)
         macro_recall = recall_score(all_targets, all_preds, average='macro', zero_division=0)
 
+        # 4. Compute and Print Confusion Matrix
+        try:
+            if len(all_preds) > 0 and len(all_targets) > 0:
+                all_preds_array = np.array(all_preds)
+                all_targets_array = np.array(all_targets)
+                cm = confusion_matrix(all_targets_array, all_preds_array, labels=np.arange(self.num_classes))
+
+                # Print confusion matrix
+                print(f"\n=== Confusion Matrix for Task {task_id + 1} ===")
+                class_names = [f"Class {i}" for i in range(self.num_classes)]
+                
+                # Print column headers (predicted classes)
+                header = f"{'Actual \\ Predicted':<20}"
+                for i in range(min(10, self.num_classes)):  # Limit to first 10 for readability
+                    header += f"{class_names[i]:<12}"
+                if self.num_classes > 10:
+                    header += "..."
+                print(header)
+                print("-" * len(header))
+                
+                # Print rows
+                for i in range(min(10, self.num_classes)):  # Limit to first 10 for readability
+                    row_str = f"{class_names[i]:<20}"
+                    for j in range(min(10, self.num_classes)):
+                        row_str += f"{int(cm[i, j]):>10}  "
+                    if self.num_classes > 10:
+                        row_str += "..."
+                    print(row_str)
+                
+                if self.num_classes > 10:
+                    print(f"... (showing first 10x10, total: {self.num_classes}x{self.num_classes})")
+                print()
+            else:
+                cm = np.zeros((self.num_classes, self.num_classes), dtype=int)
+                print(f"\n=== Confusion Matrix for Task {task_id + 1} ===")
+                print("No predictions/targets collected.")
+                print()
+        except Exception as e:
+            cm = np.zeros((self.num_classes, self.num_classes), dtype=int)
+            print(f"\n=== Confusion Matrix for Task {task_id + 1} ===")
+            print(f"Error computing confusion matrix: {e}")
+            print()
+
         # Gather the stats from all processes
         metric_logger.synchronize_between_processes()
 
@@ -372,14 +415,15 @@ class Engine():
               .format(top1=metric_logger.meters['Acc@1'], top3=metric_logger.meters['Acc@3'],
                       losses=metric_logger.meters['Loss'], f1=macro_f1))
 
-        # 4. Return extended dictionary
+        # 5. Return extended dictionary
         return {
             'Acc@1': metric_logger.meters['Acc@1'].global_avg,
             'Acc@3': metric_logger.meters['Acc@3'].global_avg,
             'Loss': metric_logger.meters['Loss'].global_avg,
             'F1': macro_f1,
             'Precision': macro_precision,
-            'Recall': macro_recall
+            'Recall': macro_recall,
+            'confusion_matrix': cm
         }
 
     @torch.no_grad()
