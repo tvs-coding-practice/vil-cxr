@@ -13,7 +13,6 @@ import numpy as np
 
 from timm.utils import accuracy
 from timm.optim import create_optimizer
-from timm.utils.model_ema import ModelEmaV2
 import copy
 import utils
 import torch.nn.functional as F
@@ -62,6 +61,18 @@ class Engine():
             self.tanh = torch.nn.Tanh()
             
         self.cs=torch.nn.CosineSimilarity(dim=1,eps=1e-6)
+
+    def update_ema_adapter(self, ema_adapter, current_adapter, decay):
+        """Manually update EMA adapter parameters"""
+        with torch.no_grad():
+            # Iterate over each adapter module in the ModuleList
+            for ema_module, current_module in zip(ema_adapter, current_adapter):
+                for ema_param, current_param in zip(ema_module.parameters(), current_module.parameters()):
+                    ema_param.data.mul_(decay).add_(current_param.data, alpha=1.0 - decay)
+
+    def create_ema_adapter(self, adapter):
+        """Create a deep copy of adapter for EMA"""
+        return copy.deepcopy(adapter)
 
     def kl_div(self,p,q):
         p=F.softmax(p,dim=1)
@@ -253,7 +264,8 @@ class Engine():
             metric_logger.meters['Acc@3'].update(acc3.item(), n=input.shape[0])
 
             if ema_model is not None:
-                ema_model.update(model.get_adapter())
+                current_adapter = model.get_adapter()
+                self.update_ema_adapter(ema_model, current_adapter, self.args.ema_decay)
             
         # gather the stats from all processes
         metric_logger.synchronize_between_processes()
@@ -313,7 +325,7 @@ class Engine():
                 if ema_model is not None:
                     output_ema = [output.softmax(dim=1)]
                     tmp_adapter = model.get_adapter()
-                    model.put_adapter(ema_model.module)
+                    model.put_adapter(ema_model)
                     output_ema_forward = model(input)
                     output_ema_forward, _, _ = self.get_max_label_logits(output_ema_forward, class_mask[task_id],
                                                                          slice=True)
@@ -530,8 +542,11 @@ class Engine():
                 optimizer = create_optimizer(args, model)
             
             if task_id == 1 and len(args.adapt_blocks) > 0:
-                # ema_model = ModelEmaV2(model.adapter, decay=args.ema_decay).to(device)
-                ema_model = ModelEmaV2(model.get_adapter(), decay=args.ema_decay, device=device)
+                # Create manual EMA adapter
+                ema_model = self.create_ema_adapter(model.get_adapter())
+                ema_model = ema_model.to(device)
+                for param in ema_model.parameters():
+                    param.requires_grad = False
             model, optimizer = self.pre_train_task(model, data_loader[task_id]['train'], device, task_id,args)
             for epoch in range(args.epochs):
                 model = self.pre_train_epoch(model=model, epoch=epoch, task_id=task_id, args=args,)
@@ -554,7 +569,7 @@ class Engine():
                 checkpoint_path = os.path.join(args.output_dir, 'checkpoint/task{}_checkpoint.pth'.format(task_id+1))
                 state_dict = {
                         'model': model.state_dict(),
-                        'ema_model': ema_model.state_dict() if ema_model is not None else None,
+                        'ema_model': {k: v.cpu() for k, v in ema_model.state_dict().items()} if ema_model is not None else None,
                         'optimizer': optimizer.state_dict(),
                         'epoch': epoch,
                         'args': args,
